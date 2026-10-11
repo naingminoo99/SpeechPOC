@@ -29,6 +29,8 @@ iOS Whisper tab ──m4a + terms──▶ Cloud Function `transcribe` ──▶
 scripts/deploy.sh      # put the model on the GPU (~15 min). Billing starts.
 scripts/undeploy.sh    # take it off — do this after every test session
 scripts/test.sh clip.m4a
+scripts/deploy-live.sh   # Whisper Live (Cloud Run GPU, scales to zero)
+scripts/undeploy-live.sh # delete it so nothing can bill
 ```
 
 The Vertex L4 bills every hour it's deployed, idle or not. The Cloud Run `whisper-live` service scales to
