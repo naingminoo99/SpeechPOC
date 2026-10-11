@@ -1,0 +1,717 @@
+<title>Whisper POC Findings</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  /* Layout: a vertical stack of fixed 16:9 slides; everything inside is sized in slide units (1280 wide), so slides scale as one piece. Skin: diagram-design default editorial. */
+  :root {
+    --paper: #f5f5f5;
+    --paper-2: #ececec;
+    --card: #ffffff;
+    --ink: #2d3142;
+    --muted: #4f5d75;
+    --soft: #5a6580;
+    --rule: rgba(45, 49, 66, 0.12);
+    --rule-solid: #bfc0c0;
+    --accent: #bf4520;
+    --accent-tint: rgba(191, 69, 32, 0.08);
+    --link: #2e5aa8;
+    --input-fill: rgba(79, 93, 117, 0.10);
+    --store-fill: rgba(45, 49, 66, 0.05);
+    --ext-fill: rgba(45, 49, 66, 0.03);
+    --ext-stroke: rgba(45, 49, 66, 0.30);
+    --grid: rgba(45, 49, 66, 0.08);
+    --axis: rgba(45, 49, 66, 0.25);
+    --bar: rgba(79, 93, 117, 0.15);
+    --bar-focal: rgba(191, 69, 32, 0.12);
+    --serif: 'Instrument Serif', 'Noto Serif', Georgia, serif;
+    --sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #2d3142; --paper-2: #393e53; --card: #343a4f; --ink: #f5f5f5; --muted: #bfc0c0;
+      --soft: #949eb2; --rule: rgba(245, 245, 245, 0.12); --rule-solid: rgba(191, 192, 192, 0.25);
+      --accent: #f08a59; --accent-tint: rgba(240, 138, 89, 0.10); --link: #739fdf;
+      --input-fill: rgba(191, 192, 192, 0.10); --store-fill: rgba(245, 245, 245, 0.05);
+      --ext-fill: rgba(245, 245, 245, 0.03); --ext-stroke: rgba(245, 245, 245, 0.30);
+      --grid: rgba(245, 245, 245, 0.08); --axis: rgba(245, 245, 245, 0.20);
+      --bar: rgba(191, 192, 192, 0.15); --bar-focal: rgba(240, 138, 89, 0.14);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #2d3142; --paper-2: #393e53; --card: #343a4f; --ink: #f5f5f5; --muted: #bfc0c0;
+    --soft: #949eb2; --rule: rgba(245, 245, 245, 0.12); --rule-solid: rgba(191, 192, 192, 0.25);
+    --accent: #f08a59; --accent-tint: rgba(240, 138, 89, 0.10); --link: #739fdf;
+    --input-fill: rgba(191, 192, 192, 0.10); --store-fill: rgba(245, 245, 245, 0.05);
+    --ext-fill: rgba(245, 245, 245, 0.03); --ext-stroke: rgba(245, 245, 245, 0.30);
+    --grid: rgba(245, 245, 245, 0.08); --axis: rgba(245, 245, 245, 0.20);
+    --bar: rgba(191, 192, 192, 0.15); --bar-focal: rgba(240, 138, 89, 0.14);
+    color-scheme: dark;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper-2);
+    color: var(--ink);
+    font-family: var(--sans);
+    padding-inline: 16px;
+    padding-block: 24px;
+  }
+  .deck { max-width: 1280px; margin: 0 auto; display: grid; gap: 24px; }
+
+  .slide {
+    container-type: inline-size;
+    aspect-ratio: 16 / 9;
+    max-width: 100%;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    overflow: hidden;
+    scroll-margin-block: 24px;
+  }
+  .slide:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .s {
+    --u: calc(100cqw / 1280);
+    height: 100%;
+    padding: calc(var(--u) * 40) calc(var(--u) * 56) calc(var(--u) * 24);
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--u) * 20);
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: calc(var(--u) * 12);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 calc(var(--u) * 6);
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: calc(var(--u) * 44);
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h1 em { color: var(--accent); }
+  .lede {
+    font-size: calc(var(--u) * 16);
+    color: var(--muted);
+    margin: calc(var(--u) * 8) 0 0;
+    max-width: 62ch;
+  }
+  .fig svg { display: block; width: 100%; height: auto; }
+
+  .cards { display: grid; gap: calc(var(--u) * 16); align-items: start; }
+  .card {
+    min-width: 0;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: calc(var(--u) * 16) calc(var(--u) * 18);
+  }
+  .card h3 {
+    display: flex; align-items: center; gap: calc(var(--u) * 8);
+    font-size: calc(var(--u) * 16); font-weight: 600; margin: 0 0 calc(var(--u) * 8);
+  }
+  .dot { width: calc(var(--u) * 7); height: calc(var(--u) * 7); border-radius: 50%; background: var(--ink); flex: none; }
+  .dot.coral { background: var(--accent); }
+  .dot.link { background: var(--link); }
+  .dot.muted { background: var(--muted); }
+  .card p, .card li { font-size: calc(var(--u) * 14); line-height: 1.45; margin: 0; color: var(--ink); }
+  .card p + p { margin-top: calc(var(--u) * 6); }
+  .card ul { margin: 0; padding-left: calc(var(--u) * 16); display: grid; gap: calc(var(--u) * 4); }
+  .card .k {
+    font-family: var(--mono); font-size: calc(var(--u) * 11); letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--muted); margin: calc(var(--u) * 10) 0 calc(var(--u) * 4);
+  }
+  .card .k:first-of-type { margin-top: 0; }
+  code, .mono { font-family: var(--mono); font-size: 0.9em; }
+
+  .foot {
+    margin-top: auto;
+    display: flex; justify-content: space-between; gap: calc(var(--u) * 16);
+    border-top: 1px solid var(--rule);
+    padding-top: calc(var(--u) * 10);
+    font-family: var(--mono); font-size: calc(var(--u) * 11); color: var(--soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  table.effort { width: 100%; border-collapse: collapse; font-size: calc(var(--u) * 13.5); }
+  table.effort th {
+    text-align: left; font-family: var(--mono); font-weight: 500; font-size: calc(var(--u) * 10.5);
+    letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+    padding: 0 calc(var(--u) * 10) calc(var(--u) * 8) 0; border-bottom: 1px solid var(--rule-solid);
+  }
+  table.effort td {
+    vertical-align: top; padding: calc(var(--u) * 10) calc(var(--u) * 10) calc(var(--u) * 10) 0;
+    border-bottom: 1px solid var(--rule); line-height: 1.4;
+  }
+  table.effort td:first-child { font-weight: 600; width: 27%; }
+  table.effort td.num { font-family: var(--mono); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .split { display: grid; grid-template-columns: 1.02fr 1fr; gap: calc(var(--u) * 36); align-items: start; }
+  .split > * { min-width: 0; }
+  .scenario { font-size: calc(var(--u) * 14); color: var(--muted); margin: 0 0 calc(var(--u) * 6); }
+  .src { font-family: var(--mono); font-size: calc(var(--u) * 10); color: var(--soft); line-height: 1.5; margin: 0; }
+
+  /* SVG roles */
+  .bg { fill: var(--paper); }
+  .n-back { fill: var(--card); stroke: var(--ink); stroke-width: 1; }
+  .n-input { fill: var(--input-fill); stroke: var(--soft); stroke-width: 1; }
+  .n-focal { fill: var(--accent-tint); stroke: var(--accent); stroke-width: 1.2; }
+  .n-store { fill: var(--store-fill); stroke: var(--muted); stroke-width: 1; }
+  .n-ext { fill: var(--ext-fill); stroke: var(--ext-stroke); stroke-width: 1; }
+  .ln { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+  .ln.acc { stroke: var(--accent); }
+  .ln.lnk { stroke: var(--link); }
+  .ln.dash { stroke-dasharray: 5 4; }
+  .ln.hair { stroke: var(--soft); stroke-width: 1; }
+  .m-muted { fill: var(--muted); } .m-acc { fill: var(--accent); } .m-link { fill: var(--link); }
+  .t-name { fill: var(--ink); font-family: var(--sans); font-weight: 600; font-size: 16px; }
+  .t-row { fill: var(--ink); font-family: var(--sans); font-weight: 600; font-size: 14px; }
+  .t-sub { fill: var(--muted); font-family: var(--mono); font-size: 12px; }
+  .t-small { fill: var(--muted); font-family: var(--mono); font-size: 11px; }
+  .t-chip { fill: var(--ink); font-family: var(--sans); font-weight: 500; font-size: 11px; }
+  .t-lab { fill: var(--soft); font-family: var(--mono); font-size: 12px; letter-spacing: 0.06em; }
+  .t-tag { font-family: var(--mono); font-weight: 500; font-size: 8px; letter-spacing: 0.08em; }
+  .tag-ink { fill: var(--muted); } .tag-acc { fill: var(--accent); }
+  .tagbox { fill: none; stroke: var(--rule-solid); stroke-width: 0.8; }
+  .tagbox.acc { stroke: var(--accent); stroke-opacity: 0.5; }
+  .t-call { fill: var(--muted); font-family: var(--serif); font-style: italic; font-size: 16px; }
+  .t-acc { fill: var(--accent); }
+  .grid { stroke: var(--grid); stroke-width: 0.8; }
+  .axis { stroke: var(--axis); stroke-width: 1; }
+  .bar { fill: var(--bar); stroke: var(--muted); stroke-width: 1; }
+  .bar.focal { fill: var(--bar-focal); stroke: var(--accent); }
+  .legend-rule { stroke: var(--rule); stroke-width: 0.8; }
+
+  .hint { text-align: center; font-family: var(--mono); font-size: 12px; color: var(--soft); margin: 0; }
+  @media (max-width: 600px) { body { padding-block: 16px; } .deck { gap: 16px; } }
+</style>
+
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon class="m-muted" points="0 0, 8 3, 0 6"/></marker>
+    <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon class="m-acc" points="0 0, 8 3, 0 6"/></marker>
+    <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon class="m-link" points="0 0, 8 3, 0 6"/></marker>
+  </defs>
+</svg>
+
+<main class="deck">
+
+  <!-- ───────────── 1 · How Whisper works ───────────── -->
+  <section class="slide" id="how" tabindex="-1" aria-label="Slide 1 of 5: How Whisper works">
+    <div class="s">
+      <header>
+        <p class="eyebrow">Speech-to-text POC · 1 / 5</p>
+        <h1>How Whisper turns speech into text</h1>
+      </header>
+
+      <div class="fig">
+        <svg viewBox="0 0 1168 304" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="whisper-pipeline-title whisper-pipeline-desc">
+          <title id="whisper-pipeline-title">Whisper transcription pipeline</title>
+          <desc id="whisper-pipeline-desc">Audio becomes a spectrogram, an encoder and decoder produce raw text guided by a vocabulary prompt, and our clean-up step fixes known terms before the transcript is shown.</desc>
+          <rect class="bg" width="1168" height="304"/>
+
+          <!-- arrows first -->
+          <line class="ln" x1="164" y1="182" x2="204" y2="182" marker-end="url(#arrow)"/>
+          <line class="ln" x1="364" y1="182" x2="404" y2="182" marker-end="url(#arrow)"/>
+          <line class="ln" x1="564" y1="182" x2="604" y2="182" marker-end="url(#arrow)"/>
+          <line class="ln acc" x1="764" y1="182" x2="804" y2="182" marker-end="url(#arrow-accent)"/>
+          <line class="ln acc" x1="964" y1="182" x2="1004" y2="182" marker-end="url(#arrow-accent)"/>
+          <line class="ln acc" x1="684" y1="88" x2="684" y2="150" marker-end="url(#arrow-accent)"/>
+          <rect class="bg" x="692" y="108" width="56" height="16" rx="2"/>
+          <text class="t-lab" x="696" y="120">BIASES</text>
+
+          <!-- vocabulary prompt (focal) -->
+          <rect class="bg" x="604" y="24" width="160" height="64" rx="6"/>
+          <rect class="n-focal" x="604" y="24" width="160" height="64" rx="6"/>
+          <rect class="tagbox acc" x="612" y="30" width="36" height="12" rx="2"/>
+          <text class="t-tag tag-acc" x="630" y="39" text-anchor="middle">OURS</text>
+          <text class="t-name" x="684" y="62" text-anchor="middle">Vocabulary prompt</text>
+          <text class="t-sub" x="684" y="78" text-anchor="middle">≤ 224 tokens</text>
+
+          <!-- main row -->
+          <rect class="bg" x="4" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-input" x="4" y="150" width="160" height="64" rx="6"/>
+          <text class="t-name" x="84" y="184" text-anchor="middle">Your voice</text>
+          <text class="t-sub" x="84" y="200" text-anchor="middle">16 kHz mono</text>
+
+          <rect class="bg" x="204" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-back" x="204" y="150" width="160" height="64" rx="6"/>
+          <text class="t-name" x="284" y="184" text-anchor="middle">Spectrogram</text>
+          <text class="t-sub" x="284" y="200" text-anchor="middle">30 s windows</text>
+
+          <rect class="bg" x="404" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-back" x="404" y="150" width="160" height="64" rx="6"/>
+          <text class="t-name" x="484" y="184" text-anchor="middle">Encoder</text>
+          <text class="t-sub" x="484" y="200" text-anchor="middle">hears the sounds</text>
+
+          <rect class="bg" x="604" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-back" x="604" y="150" width="160" height="64" rx="6"/>
+          <text class="t-name" x="684" y="184" text-anchor="middle">Decoder</text>
+          <text class="t-sub" x="684" y="200" text-anchor="middle">writes words</text>
+
+          <rect class="bg" x="804" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-focal" x="804" y="150" width="160" height="64" rx="6"/>
+          <rect class="tagbox acc" x="812" y="156" width="36" height="12" rx="2"/>
+          <text class="t-tag tag-acc" x="830" y="165" text-anchor="middle">OURS</text>
+          <text class="t-name" x="884" y="188" text-anchor="middle">Clean-up</text>
+          <text class="t-sub" x="884" y="204" text-anchor="middle">vocab.py</text>
+
+          <rect class="bg" x="1004" y="150" width="160" height="64" rx="6"/>
+          <rect class="n-back" x="1004" y="150" width="160" height="64" rx="6"/>
+          <text class="t-name" x="1084" y="184" text-anchor="middle">Transcript</text>
+          <text class="t-sub" x="1084" y="200" text-anchor="middle">shown in the app</text>
+
+          <!-- model bracket -->
+          <path class="ln hair" d="M404 228 V236 H764 V228"/>
+          <text class="t-sub" x="584" y="256" text-anchor="middle">Whisper large-v3-turbo · 809M parameters · one L4 GPU</text>
+
+          <!-- legend -->
+          <line class="legend-rule" x1="4" y1="272" x2="1164" y2="272"/>
+          <text class="t-tag tag-ink" x="4" y="292" letter-spacing="0.14em">LEGEND</text>
+          <rect class="n-focal" x="72" y="283" width="16" height="12" rx="2"/>
+          <text class="t-small" x="96" y="293">where our vocabulary goes in</text>
+          <rect class="n-input" x="320" y="283" width="16" height="12" rx="2"/>
+          <text class="t-small" x="344" y="293">audio in</text>
+          <rect class="n-back" x="432" y="283" width="16" height="12" rx="2"/>
+          <text class="t-small" x="456" y="293">the model</text>
+        </svg>
+      </div>
+
+      <div class="cards" style="grid-template-columns: 1.15fr 1fr 0.95fr">
+        <div class="card">
+          <h3><span class="dot muted"></span>Learned, not programmed</h3>
+          <p>Whisper was trained on about 5 million hours of speech. It writes the most likely words, so rare names like “Waku Ghin” lose to common words unless we hint them.</p>
+        </div>
+        <div class="card">
+          <h3><span class="dot"></span>Built for whole clips</h3>
+          <p>It reads audio in 30-second windows and has no built-in streaming. That is why Whisper Live has to re-run it every second.</p>
+        </div>
+        <div class="card">
+          <h3><span class="dot coral"></span>Our vocabulary, twice</h3>
+          <p>Before: the term list goes in as a prompt (a soft hint). After: <span class="mono">vocab.py</span> fixes known mishearings and near-misses.</p>
+        </div>
+      </div>
+
+      <footer class="foot"><span>SpeechPOC · Whisper findings</span><span>1 / 5</span></footer>
+    </div>
+  </section>
+
+  <!-- ───────────── 2 · Whisper vs Whisper Live ───────────── -->
+  <section class="slide" id="compare" tabindex="-1" aria-label="Slide 2 of 5: Whisper and Whisper Live compared">
+    <div class="s">
+      <header>
+        <p class="eyebrow">Two ways to run the same model · 2 / 5</p>
+        <h1>Whisper waits for Stop. Whisper Live writes <em>while you talk</em>.</h1>
+      </header>
+
+      <div class="fig">
+        <svg viewBox="0 0 1168 236" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="timing-title timing-desc">
+          <title id="timing-title">When text appears in each mode</title>
+          <desc id="timing-desc">For eight seconds of speech, Whisper shows the full transcript about a second after Stop, while Whisper Live shows words about one and a half seconds behind the speaker and finalises after Stop.</desc>
+          <rect class="bg" width="1168" height="236"/>
+
+          <!-- time grid: x = 180 + t * 80 (t in seconds, 0–12) -->
+          <line class="grid" x1="340" y1="16" x2="340" y2="200"/>
+          <line class="grid" x1="500" y1="16" x2="500" y2="200"/>
+          <line class="grid" x1="660" y1="16" x2="660" y2="200"/>
+          <line class="grid" x1="980" y1="16" x2="980" y2="200"/>
+          <line class="grid" x1="1140" y1="16" x2="1140" y2="200"/>
+          <line class="axis" x1="180" y1="200" x2="1140" y2="200"/>
+          <line class="axis" x1="180" y1="16" x2="180" y2="200"/>
+          <text class="t-small" x="180" y="220" text-anchor="middle">0 s</text>
+          <text class="t-small" x="340" y="220" text-anchor="middle">2</text>
+          <text class="t-small" x="500" y="220" text-anchor="middle">4</text>
+          <text class="t-small" x="660" y="220" text-anchor="middle">6</text>
+          <text class="t-small" x="820" y="220" text-anchor="middle">8</text>
+          <text class="t-small" x="980" y="220" text-anchor="middle">10</text>
+          <text class="t-small" x="1140" y="220" text-anchor="middle">12 s</text>
+
+          <!-- stop marker -->
+          <line class="ln dash" x1="820" y1="16" x2="820" y2="200"/>
+          <rect class="bg" x="826" y="8" width="40" height="16" rx="2"/>
+          <text class="t-lab" x="830" y="20">STOP</text>
+
+          <!-- row labels -->
+          <text class="t-row" x="0" y="50">You speak</text>
+          <text class="t-row" x="0" y="114">Whisper</text>
+          <text class="t-row" x="0" y="172">Whisper Live</text>
+
+          <!-- speech -->
+          <rect class="n-input" x="180" y="32" width="640" height="28" rx="4"/>
+          <text class="t-sub" x="196" y="51">“Welcome back. As a Paiza Chairman member you can use your Sands Rewards Club…”</text>
+
+          <!-- whisper (batch) -->
+          <line class="ln hair dash" x1="180" y1="110" x2="812" y2="110"/>
+          <rect class="bg" x="448" y="102" width="120" height="16" rx="2"/>
+          <text class="t-small" x="508" y="114" text-anchor="middle">nothing on screen</text>
+          <rect class="n-store" x="820" y="96" width="96" height="28" rx="4"/>
+          <text class="t-small" x="868" y="114" text-anchor="middle">upload + GPU</text>
+          <rect class="n-back" x="916" y="96" width="224" height="28" rx="4"/>
+          <text class="t-chip" x="1028" y="114" text-anchor="middle">Full transcript, all at once</text>
+
+          <!-- whisper live -->
+          <rect class="n-focal" x="300" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="336" y="172" text-anchor="middle">Welcome</text>
+          <rect class="n-back" x="380" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="416" y="172" text-anchor="middle">back. As a</text>
+          <rect class="n-back" x="460" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="496" y="172" text-anchor="middle">Paiza</text>
+          <rect class="n-back" x="540" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="576" y="172" text-anchor="middle">Chairman</text>
+          <rect class="n-back" x="620" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="656" y="172" text-anchor="middle">member</text>
+          <rect class="n-back" x="700" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="736" y="172" text-anchor="middle">you can use</text>
+          <rect class="n-back" x="780" y="154" width="72" height="28" rx="4"/>
+          <text class="t-chip" x="816" y="172" text-anchor="middle">your Sands</text>
+          <rect class="n-store" x="860" y="154" width="112" height="28" rx="4"/>
+          <text class="t-small" x="916" y="172" text-anchor="middle">final pass</text>
+          <text class="t-call" x="196" y="148">first words ≈ 1.5 s in</text>
+        </svg>
+      </div>
+
+      <div class="cards" style="grid-template-columns: 1fr 1.08fr">
+        <div class="card">
+          <h3><span class="dot link"></span>Whisper · record, then transcribe</h3>
+          <p class="k">Strengths</p>
+          <ul>
+            <li>Most accurate: sees the whole clip and searches for the best wording.</li>
+            <li>Simple request and response; easy to retry and scale.</li>
+            <li>Lowest GPU use per minute of speech: one pass.</li>
+          </ul>
+          <p class="k">Limits</p>
+          <ul>
+            <li>Nothing appears until Stop; the wait grows with length.</li>
+            <li>About 4 minutes per recording in the POC (Vertex 1.5 MB request cap).</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="dot coral"></span>Whisper Live · streaming</h3>
+          <p class="k">Strengths</p>
+          <ul>
+            <li>Text appears about 1–1.5 s behind the speaker.</li>
+            <li>Same model and same vocabulary clean-up as Whisper.</li>
+            <li>No length limit; ends with a final pass after Stop.</li>
+          </ul>
+          <p class="k">Limits</p>
+          <ul>
+            <li>Re-runs the model about once a second: roughly 3–5× more GPU per minute.</li>
+            <li>The last few words can change; words at the edges are a little less accurate.</li>
+            <li>Needs an open connection (WebSocket), so one GPU serves fewer people.</li>
+          </ul>
+        </div>
+      </div>
+
+      <footer class="foot"><span>Timings are from the POC design and a local test, not a formal benchmark</span><span>2 / 5</span></footer>
+    </div>
+  </section>
+
+  <!-- ───────────── 3 · Cost and implementation ───────────── -->
+  <section class="slide" id="cost" tabindex="-1" aria-label="Slide 3 of 5: Cost and implementation">
+    <div class="s">
+      <header>
+        <p class="eyebrow">Cost &amp; effort · 3 / 5</p>
+        <h1>Managed transcription is cheapest at our volume</h1>
+      </header>
+
+      <div class="split">
+        <div>
+          <p class="scenario">Monthly cost for <strong>200 hours of speech</strong>; GPU services kept up 10 hours a day (300 h).</p>
+          <div class="fig">
+            <svg viewBox="0 0 600 392" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="cost-title cost-desc">
+              <title id="cost-title">Monthly cost by option</title>
+              <desc id="cost-desc">Azure OpenAI transcribe costs about 54 dollars a month, Azure OpenAI live about 204, self-hosted Whisper on Azure Container Apps about 319, the POC Cloud Run live service about 377, and the POC Vertex endpoint left on all month about 811.</desc>
+              <rect class="bg" width="600" height="392"/>
+              <!-- scale: x = 232 + $ × (348 / 900) -->
+              <line class="grid" x1="348" y1="24" x2="348" y2="344"/>
+              <line class="grid" x1="464" y1="24" x2="464" y2="344"/>
+              <line class="grid" x1="580" y1="24" x2="580" y2="344"/>
+              <line class="axis" x1="232" y1="24" x2="232" y2="344"/>
+              <text class="t-small" x="232" y="364" text-anchor="middle">$0</text>
+              <text class="t-small" x="348" y="364" text-anchor="middle">$300</text>
+              <text class="t-small" x="464" y="364" text-anchor="middle">$600</text>
+              <text class="t-small" x="580" y="364" text-anchor="middle">$900</text>
+              <text class="t-tag tag-ink" x="406" y="384" text-anchor="middle" letter-spacing="0.14em">USD PER MONTH · LIST PRICE</text>
+
+              <text class="t-row" x="220" y="52" text-anchor="end">Azure OpenAI transcribe</text>
+              <text class="t-small" x="220" y="68" text-anchor="end">managed · batch</text>
+              <rect class="bar focal" x="232" y="36" width="21" height="40"/>
+              <text class="t-small t-acc" x="261" y="60">$54</text>
+
+              <text class="t-row" x="220" y="116" text-anchor="end">Azure OpenAI live</text>
+              <text class="t-small" x="220" y="132" text-anchor="end">managed · streaming</text>
+              <rect class="bar" x="232" y="100" width="79" height="40"/>
+              <text class="t-small" x="319" y="124">$204</text>
+
+              <text class="t-row" x="220" y="180" text-anchor="end">Whisper on Container Apps</text>
+              <text class="t-small" x="220" y="196" text-anchor="end">self-hosted · T4 GPU</text>
+              <rect class="bar" x="232" y="164" width="123" height="40"/>
+              <text class="t-small" x="363" y="188">$319</text>
+
+              <text class="t-row" x="220" y="244" text-anchor="end">POC Live · Cloud Run</text>
+              <text class="t-small" x="220" y="260" text-anchor="end">L4 GPU · scales to zero</text>
+              <rect class="bar" x="232" y="228" width="146" height="40"/>
+              <text class="t-small" x="386" y="252">$377</text>
+
+              <text class="t-row" x="220" y="308" text-anchor="end">POC Whisper · Vertex</text>
+              <text class="t-small" x="220" y="324" text-anchor="end">L4 GPU · always on</text>
+              <rect class="bar" x="232" y="292" width="314" height="40"/>
+              <text class="t-small" x="554" y="316">$811</text>
+            </svg>
+          </div>
+        </div>
+
+        <div>
+          <table class="effort">
+            <thead><tr><th>Option on Azure</th><th>What we build</th><th>Effort*</th><th>Pick it when</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>Azure OpenAI transcribe</td>
+                <td>App upload, a small proxy for the key, <span class="mono">vocab.py</span> clean-up</td>
+                <td class="num">~1 week</td>
+                <td>It gets our terms right; Stop-then-text is acceptable</td>
+              </tr>
+              <tr>
+                <td>Azure OpenAI live</td>
+                <td>Streaming client in the app, token proxy, same clean-up</td>
+                <td class="num">~2 weeks</td>
+                <td>Live text matters and we don't want to run GPUs</td>
+              </tr>
+              <tr>
+                <td>Self-hosted Whisper</td>
+                <td>Reuse the POC container and stream server on Container Apps GPU</td>
+                <td class="num">2–3 weeks</td>
+                <td>We need full control of prompt and streaming, or steady high volume</td>
+              </tr>
+            </tbody>
+          </table>
+          <p class="src" style="margin-top: calc(100cqw / 1280 * 12)">* Rough engineering estimate for a first production version.</p>
+        </div>
+      </div>
+
+      <p class="src">List prices pulled 11 Oct 2026, before tax and discounts. Azure OpenAI <span class="mono">gpt-transcribe</span> $0.27 and <span class="mono">gpt-live-transcribe</span> $1.02 per audio hour (Global, East US). Container Apps T4 $0.000095/s + 4 vCPU + 16 GiB (Southeast Asia). Cloud Run L4 $0.000224/s + 4 vCPU + 16 GiB (asia-southeast1). Vertex g2-standard-8 + L4 ≈ $1.11/h (us-central1). Azure OpenAI availability in Southeast Asia still to confirm.</p>
+
+      <footer class="foot"><span>SpeechPOC · Whisper findings</span><span>3 / 5</span></footer>
+    </div>
+  </section>
+
+  <!-- ───────────── 4 · POC architecture ───────────── -->
+  <section class="slide" id="poc" tabindex="-1" aria-label="Slide 4 of 5: What the POC is built on">
+    <div class="s">
+      <header>
+        <p class="eyebrow">The POC as built · 4 / 5</p>
+        <h1>One app, three engines, one Whisper image</h1>
+      </header>
+
+      <div class="fig">
+        <svg viewBox="0 0 1168 344" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="poc-arch-title poc-arch-desc">
+          <title id="poc-arch-title">SpeechPOC architecture</title>
+          <desc id="poc-arch-desc">The app sends audio to Apple's on-device recognizer, to a transcribe proxy that calls a Vertex AI GPU endpoint, and over a WebSocket to the whisper-live Cloud Run GPU service; both cloud paths run the same Whisper container image.</desc>
+          <rect class="bg" width="1168" height="344"/>
+
+          <!-- arrows first -->
+          <path class="ln" d="M204 140 H236 Q244 140 244 132 V64 Q244 56 252 56 H324" marker-end="url(#arrow)"/>
+          <rect class="bg" x="264" y="34" width="48" height="16" rx="2"/>
+          <text class="t-lab" x="288" y="46" text-anchor="middle">LOCAL</text>
+
+          <line class="ln lnk" x1="204" y1="168" x2="324" y2="168" marker-end="url(#arrow-link)"/>
+          <rect class="bg" x="236" y="146" width="56" height="16" rx="2"/>
+          <text class="t-lab" x="264" y="158" text-anchor="middle">BATCH</text>
+
+          <path class="ln acc" d="M204 196 H228 Q236 196 236 204 V272 Q236 280 244 280 H324" marker-end="url(#arrow-accent)"/>
+          <rect class="bg" x="260" y="258" width="40" height="16" rx="2"/>
+          <text class="t-lab t-acc" x="280" y="270" text-anchor="middle">LIVE</text>
+
+          <line class="ln lnk" x1="564" y1="168" x2="684" y2="168" marker-end="url(#arrow-link)"/>
+          <rect class="bg" x="582" y="146" width="84" height="16" rx="2"/>
+          <text class="t-lab" x="624" y="158" text-anchor="middle">AUDIO FILE</text>
+
+          <path class="ln dash" d="M924 168 H948 Q956 168 956 176 V216 Q956 224 964 224 H1004" marker-end="url(#arrow)"/>
+          <path class="ln dash" d="M564 280 H972 Q980 280 980 272 V264 Q980 256 988 256 H1004" marker-end="url(#arrow)"/>
+
+          <!-- nodes -->
+          <rect class="bg" x="4" y="112" width="200" height="112" rx="6"/>
+          <rect class="n-input" x="4" y="112" width="200" height="112" rx="6"/>
+          <rect class="tagbox" x="12" y="118" width="28" height="12" rx="2"/>
+          <text class="t-tag tag-ink" x="26" y="127" text-anchor="middle">APP</text>
+          <text class="t-name" x="104" y="166" text-anchor="middle">SpeechPOC</text>
+          <text class="t-sub" x="104" y="184" text-anchor="middle">iOS · macOS</text>
+          <text class="t-sub" x="104" y="200" text-anchor="middle">3 tabs, 1 vocabulary</text>
+
+          <rect class="bg" x="324" y="24" width="240" height="64" rx="6"/>
+          <rect class="n-ext" x="324" y="24" width="240" height="64" rx="6"/>
+          <text class="t-name" x="444" y="54" text-anchor="middle">Apple SpeechAnalyzer</text>
+          <text class="t-sub" x="444" y="72" text-anchor="middle">on device · custom LM</text>
+
+          <rect class="bg" x="324" y="136" width="240" height="64" rx="6"/>
+          <rect class="n-back" x="324" y="136" width="240" height="64" rx="6"/>
+          <text class="t-name" x="444" y="166" text-anchor="middle">transcribe proxy</text>
+          <text class="t-sub" x="444" y="184" text-anchor="middle">Cloud Functions · Singapore</text>
+
+          <rect class="bg" x="324" y="248" width="240" height="64" rx="6"/>
+          <rect class="n-focal" x="324" y="248" width="240" height="64" rx="6"/>
+          <text class="t-name" x="444" y="278" text-anchor="middle">whisper-live</text>
+          <text class="t-sub" x="444" y="296" text-anchor="middle">Cloud Run · L4 · Singapore</text>
+
+          <rect class="bg" x="684" y="136" width="240" height="64" rx="6"/>
+          <rect class="n-back" x="684" y="136" width="240" height="64" rx="6"/>
+          <text class="t-name" x="804" y="166" text-anchor="middle">Vertex AI endpoint</text>
+          <text class="t-sub" x="804" y="184" text-anchor="middle">L4 · us-central1</text>
+
+          <rect class="bg" x="1004" y="200" width="160" height="80" rx="6"/>
+          <rect class="n-store" x="1004" y="200" width="160" height="80" rx="6"/>
+          <text class="t-name" x="1084" y="236" text-anchor="middle">Whisper image</text>
+          <text class="t-sub" x="1084" y="254" text-anchor="middle">turbo + vocab.py</text>
+
+          <text class="t-call" x="684" y="228">Singapore had no free L4 GPU,</text>
+          <text class="t-call" x="684" y="248">so this endpoint runs in Iowa.</text>
+
+          <!-- legend -->
+          <line class="legend-rule" x1="4" y1="320" x2="1164" y2="320"/>
+          <text class="t-tag tag-ink" x="4" y="338" letter-spacing="0.14em">LEGEND</text>
+          <line class="ln lnk" x1="72" y1="334" x2="104" y2="334"/>
+          <text class="t-small" x="112" y="338">request and response</text>
+          <line class="ln acc" x1="284" y1="334" x2="316" y2="334"/>
+          <text class="t-small" x="324" y="338">continuous audio stream</text>
+          <line class="ln dash" x1="516" y1="334" x2="548" y2="334"/>
+          <text class="t-small" x="556" y="338">runs the same container</text>
+        </svg>
+      </div>
+
+      <div class="cards" style="grid-template-columns: 1.1fr 1fr 1fr">
+        <div class="card">
+          <h3><span class="dot"></span>Built our own Whisper container</h3>
+          <p>Google's ready-made Whisper takes no vocabulary prompt, so we serve <span class="mono">faster-whisper</span> ourselves with the prompt and <span class="mono">vocab.py</span>.</p>
+        </div>
+        <div class="card">
+          <h3><span class="dot muted"></span>Vertex can't stream</h3>
+          <p>Vertex endpoints take one request at a time (max 1.5 MB) and can't hold a WebSocket. Live therefore runs on Cloud Run.</p>
+        </div>
+        <div class="card">
+          <h3><span class="dot coral"></span>GPU supply varies by region</h3>
+          <p>The Singapore deploy waited 30+ minutes for an L4 and never got one. Plan region fallbacks on Azure too.</p>
+        </div>
+      </div>
+
+      <footer class="foot"><span>SpeechPOC · Whisper findings</span><span>4 / 5</span></footer>
+    </div>
+  </section>
+
+  <!-- ───────────── 5 · Next steps ───────────── -->
+  <section class="slide" id="next" tabindex="-1" aria-label="Slide 5 of 5: Recommendation and next steps on Azure">
+    <div class="s">
+      <header>
+        <p class="eyebrow">Recommendation · 5 / 5</p>
+        <h1>Measure on our own phrases, then build on Azure</h1>
+      </header>
+
+      <div class="fig">
+        <svg viewBox="0 0 1168 152" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="next-steps-title next-steps-desc">
+          <title id="next-steps-title">Path from POC to Azure build</title>
+          <desc id="next-steps-desc">Four steps in order: record a test set of real phrases, benchmark Apple, Whisper and Azure OpenAI on it, choose managed or self-hosted, then build on Azure.</desc>
+          <rect class="bg" width="1168" height="152"/>
+
+          <line class="ln" x1="264" y1="80" x2="304" y2="80" marker-end="url(#arrow)"/>
+          <line class="ln acc" x1="564" y1="80" x2="604" y2="80" marker-end="url(#arrow-accent)"/>
+          <line class="ln" x1="864" y1="80" x2="904" y2="80" marker-end="url(#arrow)"/>
+
+          <rect class="bg" x="4" y="24" width="260" height="112" rx="6"/>
+          <rect class="n-input" x="4" y="24" width="260" height="112" rx="6"/>
+          <rect class="tagbox" x="12" y="30" width="44" height="12" rx="2"/>
+          <text class="t-tag tag-ink" x="34" y="39" text-anchor="middle">STEP 1</text>
+          <text class="t-name" x="134" y="76" text-anchor="middle">Record a test set</text>
+          <text class="t-sub" x="134" y="96" text-anchor="middle">40–60 real phrases</text>
+          <text class="t-sub" x="134" y="112" text-anchor="middle">names, drinks, accents</text>
+
+          <rect class="bg" x="304" y="24" width="260" height="112" rx="6"/>
+          <rect class="n-focal" x="304" y="24" width="260" height="112" rx="6"/>
+          <rect class="tagbox acc" x="312" y="30" width="44" height="12" rx="2"/>
+          <text class="t-tag tag-acc" x="334" y="39" text-anchor="middle">STEP 2</text>
+          <text class="t-name" x="434" y="76" text-anchor="middle">Benchmark</text>
+          <text class="t-sub" x="434" y="96" text-anchor="middle">Apple · Whisper · Azure</text>
+          <text class="t-sub" x="434" y="112" text-anchor="middle">term hits, errors, delay</text>
+
+          <rect class="bg" x="604" y="24" width="260" height="112" rx="6"/>
+          <rect class="n-back" x="604" y="24" width="260" height="112" rx="6"/>
+          <rect class="tagbox" x="612" y="30" width="44" height="12" rx="2"/>
+          <text class="t-tag tag-ink" x="634" y="39" text-anchor="middle">STEP 3</text>
+          <text class="t-name" x="734" y="76" text-anchor="middle">Choose the setup</text>
+          <text class="t-sub" x="734" y="96" text-anchor="middle">managed or self-hosted</text>
+          <text class="t-sub" x="734" y="112" text-anchor="middle">against the criteria</text>
+
+          <rect class="bg" x="904" y="24" width="260" height="112" rx="6"/>
+          <rect class="n-back" x="904" y="24" width="260" height="112" rx="6"/>
+          <rect class="tagbox" x="912" y="30" width="44" height="12" rx="2"/>
+          <text class="t-tag tag-ink" x="934" y="39" text-anchor="middle">STEP 4</text>
+          <text class="t-name" x="1034" y="76" text-anchor="middle">Build on Azure</text>
+          <text class="t-sub" x="1034" y="96" text-anchor="middle">proxy, vocabulary service,</text>
+          <text class="t-sub" x="1034" y="112" text-anchor="middle">iOS app</text>
+        </svg>
+      </div>
+
+      <div class="cards" style="grid-template-columns: 1.3fr 1fr 0.9fr">
+        <div class="card">
+          <h3><span class="dot coral"></span>Recommendation</h3>
+          <p>Start the Azure build with <strong>Azure OpenAI transcribe</strong> plus our <span class="mono">vocab.py</span> clean-up: the lowest cost and nothing to run.</p>
+          <p>Keep <strong>self-hosted Whisper</strong> as plan B. It is already built in this POC and moves to Container Apps if Azure OpenAI misses our terms or data must stay in our own subscription.</p>
+          <p>Add live text only if staff actually need to read along while speaking.</p>
+        </div>
+        <div class="card">
+          <h3><span class="dot"></span>Decision criteria</h3>
+          <ul>
+            <li>Hit rate on our venue, drink and programme names</li>
+            <li>Data handling: guest preferences are personal data</li>
+            <li>Live text needed, or Stop-then-text enough?</li>
+            <li>Volume: self-hosting pays off only at steady high use</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3><span class="dot muted"></span>Open questions</h3>
+          <ul>
+            <li>Azure OpenAI transcription in Southeast Asia regions</li>
+            <li>Where the vocabulary list lives and who edits it</li>
+            <li>Mixed English and Chinese speech</li>
+          </ul>
+        </div>
+      </div>
+
+      <footer class="foot"><span>SpeechPOC · Whisper findings</span><span>5 / 5</span></footer>
+    </div>
+  </section>
+
+  <p class="hint">Use ↑ ↓ or Page Up / Page Down to move between slides.</p>
+</main>
+
+<script>
+  (function () {
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    function current() {
+      const mid = window.innerHeight / 2;
+      let best = 0, bestDist = Infinity;
+      slides.forEach((s, i) => {
+        const r = s.getBoundingClientRect();
+        const d = Math.abs(r.top + r.height / 2 - mid);
+        if (d < bestDist) { bestDist = d; best = i; }
+      });
+      return best;
+    }
+    function go(i) {
+      const s = slides[Math.max(0, Math.min(slides.length - 1, i))];
+      s.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+      s.focus({ preventScroll: true });
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.target.closest && e.target.closest('input, textarea')) return;
+      if (['ArrowDown', 'PageDown', 'ArrowRight', ' '].includes(e.key)) { e.preventDefault(); go(current() + 1); }
+      if (['ArrowUp', 'PageUp', 'ArrowLeft'].includes(e.key)) { e.preventDefault(); go(current() - 1); }
+    });
+  })();
+</script>
