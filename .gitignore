@@ -1,8 +1,6 @@
-# POC secrets
-SpeechPOC/WhisperSecrets.swift
 cloud/functions/node_modules/
 cloud/functions/lib/
-cloud/.secret.local
 *.local
 xcuserdata/
 __pycache__/
+!cloud/.secret.local
