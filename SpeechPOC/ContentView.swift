@@ -20,10 +20,17 @@ struct ContentView: View {
     }
 }
 
-/// On-device transcription with SpeechAnalyzer / DictationTranscriber.
+/// On-device transcription with SpeechAnalyzer (DictationTranscriber or SpeechTranscriber).
 struct LocalTranscriptionView: View {
     let vocabulary: VocabularyStore
     @State private var model = SpeechTranscriptionModel()
+    @AppStorage("localEngine") private var engine: LocalEngine = .dictation
+    @AppStorage("localLanguage") private var language: LocalLanguage = .singapore
+
+    /// Changes whenever anything that affects preparation changes, so models are ready before Start.
+    private var preparationKey: String {
+        "\(engine.rawValue)|\(language.rawValue)|\(vocabulary.cleanedTerms.joined(separator: ","))"
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,8 +42,14 @@ struct LocalTranscriptionView: View {
                     if model.isPreparingModel {
                         HStack {
                             ProgressView()
-                            Text("Downloading speech model…")
+                            Text(model.preparationStatus ?? "Preparing…")
                         }
+                    }
+
+                    if !model.rawTranscript.isEmpty, model.rawTranscript != model.transcript {
+                        Text("Before clean-up: \(model.rawTranscript)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
 
                     if let errorMessage = model.errorMessage {
@@ -44,14 +57,36 @@ struct LocalTranscriptionView: View {
                     }
 
                     RecordButton(isRecording: model.isRecording) {
-                        Task { await model.toggleRecording(vocabulary: vocabulary.cleanedTerms) }
+                        Task {
+                            await model.toggleRecording(engine: engine, language: language, vocabulary: vocabulary.cleanedTerms)
+                        }
                     }
+                    .disabled(model.isPreparingModel && !model.isRecording)
                 }
+
+                Section {
+                    Picker("Engine", selection: $engine) {
+                        ForEach(LocalEngine.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker("Language", selection: $language) {
+                        ForEach(LocalLanguage.allCases) { Text($0.title).tag($0) }
+                    }
+                } header: {
+                    Text("Recognizer")
+                } footer: {
+                    Text(engine == .dictation
+                         ? "Uses your vocabulary while recognizing (custom language model and hints), then cleans up the text."
+                         : "Apple's newer general model. It can't take custom vocabulary, so terms are only fixed in clean-up.")
+                }
+                .disabled(model.isRecording)
 
                 VocabularySection(vocabulary: vocabulary)
             }
             .formStyle(.grouped)
             .navigationTitle("Local")
+            .task(id: preparationKey) {
+                await model.prepare(engine: engine, language: language, vocabulary: vocabulary.cleanedTerms)
+            }
         }
     }
 }

@@ -1,18 +1,59 @@
 import AVFoundation
+import CryptoKit
 import Observation
 import Speech
 
-/// Drives the SpeechAnalyzer / DictationTranscriber pipeline for the POC.
+/// Which on-device recognizer the Local tab uses.
 ///
-/// Requires iOS/iPadOS 27 on a physical device (SpeechAnalyzer does not run in the Simulator).
+/// Per Apple's docs and DTS answers on the developer forums, only `DictationTranscriber` accepts custom
+/// vocabulary (contextual strings and a trained `SFSpeechLanguageModel`); `SpeechTranscriber` is the
+/// newer general-purpose model but ignores both. Both get the same vocabulary clean-up afterwards.
+enum LocalEngine: String, CaseIterable, Identifiable {
+    case dictation
+    case speech
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .dictation: "Dictation + vocabulary"
+        case .speech: "SpeechTranscriber"
+        }
+    }
+}
+
+/// English variants with on-device models. Singapore English is the default for this POC.
+enum LocalLanguage: String, CaseIterable, Identifiable {
+    case singapore = "en_SG"
+    case unitedStates = "en_US"
+    case unitedKingdom = "en_GB"
+
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .singapore: "English (Singapore)"
+        case .unitedStates: "English (US)"
+        case .unitedKingdom: "English (UK)"
+        }
+    }
+}
+
+/// Drives the SpeechAnalyzer pipeline for the Local tab.
 ///
-/// Custom vocabulary is prioritized two ways, per Apple's guidance for improving transcriber
-/// accuracy: a lightweight `AnalysisContext.contextualStrings` bias, *and* a trained
-/// `SFSpeechLanguageModel` built from the same terms and attached via
-/// `DictationTranscriber.ContentHint.customizedLanguage(modelConfiguration:)`. The trained model
-/// is the mechanism that actually re-weights the language model's word probabilities; the
-/// contextual strings alone are a soft hint and are not enough to reliably win out over common
-/// dictionary words.
+/// Requires iOS/iPadOS/macOS 27 (`CaptureInputSequenceProvider`); does not run in the Simulator.
+///
+/// Accuracy measures, following Apple's documentation and the "Recognizing speech in live audio" sample:
+/// - **Locale**: an explicit English variant instead of the device default (e.g. en_SG).
+/// - **Custom language model** (Dictation engine): trained from sentence templates with word classes
+///   ("a table at <venue>") plus X-SAMPA pronunciations for unfamiliar names, instead of isolated
+///   words — see `VocabularyCatalog`. Weighted with `SFSpeechLanguageModel.Configuration.weight`.
+/// - **Contextual strings** (Dictation engine): the same terms as a lighter bias.
+/// - **Alternatives**: final results request alternative transcriptions and keep the one that mentions
+///   the most vocabulary terms.
+/// - **Clean-up**: `VocabularyNormalizer` (port of vocab.py) fixes known mishearings and near-misses.
+/// - **Responsiveness**: models and the custom LM are prepared before Start, and the analyzer keeps
+///   its model loaded between recordings (`modelRetention: .lingering`).
 @MainActor
 @Observable
 final class SpeechTranscriptionModel {
@@ -20,32 +61,103 @@ final class SpeechTranscriptionModel {
     /// The text shown (and freely editable) in the UI's text box.
     var transcript: String = ""
 
+    /// This session's final text before vocabulary clean-up, to compare with the cleaned transcript.
+    var rawTranscript: String = ""
+
     var isRecording = false
     var isPreparingModel = false
+    var preparationStatus: String?
     var errorMessage: String?
 
-    private var transcriber: DictationTranscriber?
+    private enum ActiveTranscriber {
+        case dictation(DictationTranscriber)
+        case speech(SpeechTranscriber)
+
+        var module: any SpeechModule {
+            switch self {
+            case .dictation(let transcriber): transcriber
+            case .speech(let transcriber): transcriber
+            }
+        }
+    }
+
+    private struct Update {
+        let text: String
+        let alternatives: [String]
+        let isFinal: Bool
+    }
+
     private var analyzer: SpeechAnalyzer?
     private var captureSession: AVCaptureSession?
     private var resultsTask: Task<Void, Never>?
 
     /// Text already committed to `transcript` before/between recording sessions.
     private var finalizedText: String = ""
+    private var normalizer = VocabularyNormalizer(terms: [])
 
-    /// Cached trained language model, rebuilt only when `vocabulary` actually changes.
-    private var languageModelConfiguration: SFSpeechLanguageModel.Configuration?
-    private var languageModelVocabularySnapshot: [String] = []
+    /// What `prepare` last finished for, so Start can skip work that's already done.
+    private var preparedKey: String?
+    private var languageModel: SFSpeechLanguageModel.Configuration?
 
-    /// - Parameter vocabulary: Custom terms biased towards during recognition.
-    func toggleRecording(vocabulary: [String]) async {
-        if isRecording {
-            await stopRecording()
-        } else {
-            await startRecording(vocabulary: vocabulary)
+    // MARK: - Preparation
+
+    /// Downloads the speech model and builds the custom language model for this configuration, so
+    /// pressing Start is fast. Safe to call repeatedly; it only does work when something changed.
+    func prepare(engine: LocalEngine, language: LocalLanguage, vocabulary: [String]) async {
+        let key = Self.configurationKey(engine: engine, language: language, vocabulary: vocabulary)
+        guard key != preparedKey, !isRecording else { return }
+
+        isPreparingModel = true
+        defer {
+            isPreparingModel = false
+            preparationStatus = nil
+        }
+
+        do {
+            guard let locale = await Self.supportedLocale(for: language, engine: engine) else {
+                errorMessage = "\(language.title) isn't available for \(engine.title) on this device."
+                return
+            }
+
+            // As in Apple's sample: install the speech model first; training the custom language model
+            // needs it on the device.
+            preparationStatus = "Checking speech model…"
+            let transcriber = Self.makeTranscriber(engine: engine, locale: locale, languageModel: nil)
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber.module]) {
+                preparationStatus = "Downloading speech model…"
+                try await request.downloadAndInstall()
+            }
+
+            errorMessage = nil
+            languageModel = nil
+            if engine == .dictation, !vocabulary.isEmpty {
+                preparationStatus = "Training custom vocabulary…"
+                do {
+                    languageModel = try await Self.preparedLanguageModel(locale: locale, vocabulary: vocabulary)
+                } catch {
+                    // Still usable: contextual strings and clean-up keep working without the trained model.
+                    errorMessage = "Custom vocabulary model couldn't be built (\(error.localizedDescription)). Using hints and clean-up only."
+                }
+            }
+
+            normalizer = VocabularyNormalizer(terms: vocabulary)
+            preparedKey = key
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
-    private func startRecording(vocabulary: [String]) async {
+    // MARK: - Recording
+
+    func toggleRecording(engine: LocalEngine, language: LocalLanguage, vocabulary: [String]) async {
+        if isRecording {
+            await stopRecording()
+        } else {
+            await startRecording(engine: engine, language: language, vocabulary: vocabulary)
+        }
+    }
+
+    private func startRecording(engine: LocalEngine, language: LocalLanguage, vocabulary: [String]) async {
         errorMessage = nil
 
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
@@ -53,36 +165,13 @@ final class SpeechTranscriptionModel {
             return
         }
 
+        await prepare(engine: engine, language: language, vocabulary: vocabulary)
+        guard preparedKey == Self.configurationKey(engine: engine, language: language, vocabulary: vocabulary),
+              let locale = await Self.supportedLocale(for: language, engine: engine)
+        else { return }
+
         do {
-            guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale.current) else {
-                errorMessage = "Speech transcription isn't supported for the current locale."
-                return
-            }
-
-            isPreparingModel = true
-            let lmConfiguration = try await preparedLanguageModelConfiguration(locale: locale, vocabulary: vocabulary)
-            isPreparingModel = false
-
-            let preset = DictationTranscriber.Preset.progressiveLongDictation
-            let contentHints: Set<DictationTranscriber.ContentHint> = if let lmConfiguration {
-                preset.contentHints.union([.customizedLanguage(modelConfiguration: lmConfiguration)])
-            } else {
-                preset.contentHints
-            }
-
-            let transcriber = DictationTranscriber(
-                locale: locale,
-                contentHints: contentHints,
-                transcriptionOptions: preset.transcriptionOptions,
-                reportingOptions: preset.reportingOptions,
-                attributeOptions: preset.attributeOptions
-            )
-
-            if let installationRequest = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                isPreparingModel = true
-                try await installationRequest.downloadAndInstall()
-                isPreparingModel = false
-            }
+            let transcriber = Self.makeTranscriber(engine: engine, locale: locale, languageModel: languageModel)
 
             guard let captureDevice = AVCaptureDevice.default(.microphone, for: .audio, position: .unspecified) else {
                 errorMessage = "No microphone is available on this device."
@@ -91,40 +180,55 @@ final class SpeechTranscriptionModel {
 
             let provider = try await CaptureInputSequenceProvider.providerWithSession(
                 from: captureDevice,
-                compatibleWith: [transcriber]
+                compatibleWith: [transcriber.module]
             )
 
-            // Also bias recognition towards the same terms; a lighter-weight complement to the
-            // trained language model above.
+            // Contextual strings only affect DictationTranscriber; Apple recommends keeping the list short.
             let context = AnalysisContext()
-            context.contextualStrings[.general] = vocabulary
+            if engine == .dictation {
+                context.contextualStrings[.general] = Array(vocabulary.prefix(100))
+            }
 
             let analyzer = SpeechAnalyzer(
                 inputSequence: provider.analyzerInputs,
-                modules: [transcriber],
+                modules: [transcriber.module],
+                options: .init(priority: .userInitiated, modelRetention: .lingering),
                 analysisContext: context
             )
 
-            self.transcriber = transcriber
             self.analyzer = analyzer
             self.captureSession = provider.captureSession
             finalizedText = transcript
+            rawTranscript = ""
 
             resultsTask = Task { @MainActor [weak self] in
-                guard let self else { return }
                 do {
-                    for try await result in transcriber.results {
-                        self.handle(result: result)
+                    switch transcriber {
+                    case .dictation(let dictation):
+                        for try await result in dictation.results {
+                            self?.handle(Update(
+                                text: String(result.text.characters),
+                                alternatives: result.alternatives.map { String($0.characters) },
+                                isFinal: result.isFinal
+                            ))
+                        }
+                    case .speech(let speech):
+                        for try await result in speech.results {
+                            self?.handle(Update(
+                                text: String(result.text.characters),
+                                alternatives: result.alternatives.map { String($0.characters) },
+                                isFinal: result.isFinal
+                            ))
+                        }
                     }
                 } catch {
-                    self.errorMessage = error.localizedDescription
+                    self?.errorMessage = error.localizedDescription
                 }
             }
 
             provider.captureSession.startRunning()
             isRecording = true
         } catch {
-            isPreparingModel = false
             errorMessage = error.localizedDescription
         }
     }
@@ -145,77 +249,110 @@ final class SpeechTranscriptionModel {
         await resultsTask?.value
         resultsTask = nil
         analyzer = nil
-        transcriber = nil
     }
 
-    private func handle(result: DictationTranscriber.Result) {
-        let text = String(result.text.characters)
-
-        if result.isFinal {
-            if !text.isEmpty {
-                finalizedText += (finalizedText.isEmpty ? "" : " ") + text
+    private func handle(_ update: Update) {
+        if update.isFinal {
+            let chosen = normalizer.bestCandidate(primary: update.text, alternatives: update.alternatives)
+            let cleaned = normalizer.normalize(chosen)
+            if !chosen.isEmpty {
+                rawTranscript += (rawTranscript.isEmpty ? "" : " ") + chosen
+            }
+            if !cleaned.isEmpty {
+                finalizedText += (finalizedText.isEmpty ? "" : " ") + cleaned
             }
             transcript = finalizedText
         } else {
-            transcript = finalizedText + (finalizedText.isEmpty || text.isEmpty ? "" : " ") + text
+            let volatile = normalizer.normalize(update.text)
+            transcript = finalizedText + (finalizedText.isEmpty || volatile.isEmpty ? "" : " ") + volatile
         }
     }
 
-    /// Builds (or reuses a cached) trained language model that strongly biases recognition
-    /// towards `vocabulary`. Rebuilding only happens when the vocabulary list has changed since
-    /// the last build, since training and exporting is not free.
-    private func preparedLanguageModelConfiguration(
+    // MARK: - Building blocks
+
+    private static func makeTranscriber(
+        engine: LocalEngine,
         locale: Locale,
-        vocabulary terms: [String]
-    ) async throws -> SFSpeechLanguageModel.Configuration? {
-        guard !terms.isEmpty else { return nil }
-
-        if let configuration = languageModelConfiguration, languageModelVocabularySnapshot == terms {
-            return configuration
+        languageModel: SFSpeechLanguageModel.Configuration?
+    ) -> ActiveTranscriber {
+        switch engine {
+        case .dictation:
+            let preset = DictationTranscriber.Preset.progressiveLongDictation
+            var contentHints = preset.contentHints
+            if let languageModel {
+                contentHints.insert(.customizedLanguage(modelConfiguration: languageModel))
+            }
+            return .dictation(DictationTranscriber(
+                locale: locale,
+                contentHints: contentHints,
+                transcriptionOptions: preset.transcriptionOptions,
+                reportingOptions: preset.reportingOptions.union([.alternativeTranscriptions]),
+                attributeOptions: preset.attributeOptions
+            ))
+        case .speech:
+            let preset = SpeechTranscriber.Preset.progressiveTranscription
+            return .speech(SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: preset.transcriptionOptions,
+                reportingOptions: preset.reportingOptions.union([.alternativeTranscriptions]),
+                attributeOptions: preset.attributeOptions
+            ))
         }
+    }
 
-        let appSupportDirectory = try FileManager.default.url(
+    private static func supportedLocale(for language: LocalLanguage, engine: LocalEngine) async -> Locale? {
+        let requested = Locale(identifier: language.rawValue)
+        switch engine {
+        case .dictation:
+            return await DictationTranscriber.supportedLocale(equivalentTo: requested)
+        case .speech:
+            guard SpeechTranscriber.isAvailable else { return nil }
+            return await SpeechTranscriber.supportedLocale(equivalentTo: requested)
+        }
+    }
+
+    private static func configurationKey(engine: LocalEngine, language: LocalLanguage, vocabulary: [String]) -> String {
+        "\(engine.rawValue)|\(language.rawValue)|\(vocabulary.joined(separator: "\u{1F}"))"
+    }
+
+    /// Trains (or reuses from disk) a custom language model for `vocabulary` in `locale`. Files are
+    /// named by a hash of locale + terms, so an unchanged vocabulary is never retrained, even across
+    /// launches.
+    private static func preparedLanguageModel(locale: Locale, vocabulary: [String]) async throws -> SFSpeechLanguageModel.Configuration {
+        let fingerprint = SHA256.hash(data: Data((locale.identifier + "\n" + vocabulary.joined(separator: "\n")).utf8))
+            .prefix(8).map { String(format: "%02x", $0) }.joined()
+
+        let directory = try FileManager.default.url(
             for: .applicationSupportDirectory,
             in: .userDomainMask,
             appropriateFor: nil,
             create: true
-        )
-        let modelURL = appSupportDirectory.appendingPathComponent("SpeechPOCCustomVocabulary.bin")
-        let vocabularyURL = appSupportDirectory.appendingPathComponent("SpeechPOCCustomVocabulary.vocab")
+        ).appendingPathComponent("CustomLanguageModels", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let trainingData = SFCustomLanguageModelData(
-            locale: locale,
-            identifier: "com.speechpoc.customvocabulary",
-            version: UUID().uuidString
-        )
-
-        for term in terms {
-            // The full phrase gets the strongest weight so it's preferred as a single unit.
-            trainingData.insert(phraseCount: .init(phrase: term, count: 1000))
-
-            // Individual words also get a boost, so distinctive terms (e.g. "Paiza", "GRA") are
-            // still favored when spoken on their own, not just as part of the full phrase.
-            let words = term.split(separator: " ").map(String.init)
-            if words.count > 1 {
-                for word in words {
-                    trainingData.insert(phraseCount: .init(phrase: word, count: 300))
-                }
-            }
-        }
-
-        let trainingDataURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try await trainingData.export(to: trainingDataURL)
-        defer { try? FileManager.default.removeItem(at: trainingDataURL) }
-
+        let modelURL = directory.appendingPathComponent("vocabulary-\(fingerprint).bin")
+        let vocabularyURL = directory.appendingPathComponent("vocabulary-\(fingerprint).vocab")
         let configuration = SFSpeechLanguageModel.Configuration(
             languageModel: modelURL,
             vocabulary: vocabularyURL,
             weight: 0.9
         )
-        try await SFSpeechLanguageModel.prepareCustomLanguageModel(for: trainingDataURL, configuration: configuration)
 
-        languageModelConfiguration = configuration
-        languageModelVocabularySnapshot = terms
+        if FileManager.default.fileExists(atPath: modelURL.path), FileManager.default.fileExists(atPath: vocabularyURL.path) {
+            return configuration
+        }
+
+        let trainingData = VocabularyCatalog.trainingData(
+            locale: locale,
+            terms: vocabulary,
+            identifier: "com.speechpoc.customvocabulary",
+            version: fingerprint
+        )
+        let trainingDataURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(fingerprint).bin")
+        try await trainingData.export(to: trainingDataURL)
+        defer { try? FileManager.default.removeItem(at: trainingDataURL) }
+
+        try await SFSpeechLanguageModel.prepareCustomLanguageModel(for: trainingDataURL, configuration: configuration)
         return configuration
     }
 }
