@@ -20,16 +20,6 @@ final class SpeechTranscriptionModel {
     /// The text shown (and freely editable) in the UI's text box.
     var transcript: String = ""
 
-    /// Custom vocabulary terms biased towards during recognition.
-    var vocabulary: [String] = [
-        "Paiza Chairman",
-        "Paiza Diamond",
-        "Sands Lifestyle",
-        "SRC",
-        "Sands Rewards Club",
-        "GRA"
-    ]
-
     var isRecording = false
     var isPreparingModel = false
     var errorMessage: String?
@@ -46,15 +36,16 @@ final class SpeechTranscriptionModel {
     private var languageModelConfiguration: SFSpeechLanguageModel.Configuration?
     private var languageModelVocabularySnapshot: [String] = []
 
-    func toggleRecording() async {
+    /// - Parameter vocabulary: Custom terms biased towards during recognition.
+    func toggleRecording(vocabulary: [String]) async {
         if isRecording {
             await stopRecording()
         } else {
-            await startRecording()
+            await startRecording(vocabulary: vocabulary)
         }
     }
 
-    private func startRecording() async {
+    private func startRecording(vocabulary: [String]) async {
         errorMessage = nil
 
         guard await AVCaptureDevice.requestAccess(for: .audio) else {
@@ -69,7 +60,7 @@ final class SpeechTranscriptionModel {
             }
 
             isPreparingModel = true
-            let lmConfiguration = try await preparedLanguageModelConfiguration(locale: locale)
+            let lmConfiguration = try await preparedLanguageModelConfiguration(locale: locale, vocabulary: vocabulary)
             isPreparingModel = false
 
             let preset = DictationTranscriber.Preset.progressiveLongDictation
@@ -107,8 +98,6 @@ final class SpeechTranscriptionModel {
             // trained language model above.
             let context = AnalysisContext()
             context.contextualStrings[.general] = vocabulary
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
 
             let analyzer = SpeechAnalyzer(
                 inputSequence: provider.analyzerInputs,
@@ -175,11 +164,10 @@ final class SpeechTranscriptionModel {
     /// Builds (or reuses a cached) trained language model that strongly biases recognition
     /// towards `vocabulary`. Rebuilding only happens when the vocabulary list has changed since
     /// the last build, since training and exporting is not free.
-    private func preparedLanguageModelConfiguration(locale: Locale) async throws -> SFSpeechLanguageModel.Configuration? {
-        let terms = vocabulary
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-
+    private func preparedLanguageModelConfiguration(
+        locale: Locale,
+        vocabulary terms: [String]
+    ) async throws -> SFSpeechLanguageModel.Configuration? {
         guard !terms.isEmpty else { return nil }
 
         if let configuration = languageModelConfiguration, languageModelVocabularySnapshot == terms {
@@ -229,15 +217,5 @@ final class SpeechTranscriptionModel {
         languageModelConfiguration = configuration
         languageModelVocabularySnapshot = terms
         return configuration
-    }
-
-    func addVocabularyTerm(_ term: String) {
-        let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !vocabulary.contains(trimmed) else { return }
-        vocabulary.append(trimmed)
-    }
-
-    func removeVocabularyTerm(_ term: String) {
-        vocabulary.removeAll { $0 == term }
     }
 }

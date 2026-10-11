@@ -1,0 +1,11 @@
+{
+  "name": "speechpoc-transcribe",
+  "private": true,
+  "main": "index.js",
+  "engines": { "node": "22" },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.4.0",
+    "busboy": "^1.6.0",
+    "google-auth-library": "^9.15.0"
+  }
+}
